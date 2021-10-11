@@ -39,10 +39,13 @@ class FirstFragment : Fragment() {
         locationCallback = object : LocationCallback() {
             override fun onLocationResult(locationResult: LocationResult?) {
                 locationResult ?: return
-                for (location in locationResult.locations) {
-                    // TODO Update UI with location data
-                    Log.d("onLocationResult", location.toString())
-                }
+                locationResult.lastLocation ?: return
+                _binding?.coordinatesText?.text =
+                    "Last ${locationResult.locations.size} locations recorded" +
+                            "\nLongitude: ${locationResult.lastLocation.longitude}" +
+                            "\nLatitude: ${locationResult.lastLocation.latitude}" +
+                            "\nBearing: ${locationResult.lastLocation.bearing}" +
+                            "\nSpeed: ${locationResult.lastLocation.speed}"
             }
         }
 
