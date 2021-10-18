@@ -1,16 +1,23 @@
 package com.example.b2i
 
 import android.Manifest
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothManager
+import android.bluetooth.le.AdvertiseCallback
+import android.bluetooth.le.AdvertiseData
+import android.bluetooth.le.AdvertiseSettings
+import android.bluetooth.le.BluetoothLeAdvertiser
+import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.Looper
-import android.util.Log
-import androidx.fragment.app.Fragment
+import android.os.ParcelUuid
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import androidx.core.app.ActivityCompat
-import androidx.navigation.fragment.findNavController
+import androidx.core.content.getSystemService
+import androidx.fragment.app.Fragment
 import com.example.b2i.databinding.FragmentFirstBinding
 import com.google.android.gms.location.*
 
@@ -40,12 +47,7 @@ class FirstFragment : Fragment() {
             override fun onLocationResult(locationResult: LocationResult?) {
                 locationResult ?: return
                 locationResult.lastLocation ?: return
-                _binding?.coordinatesText?.text =
-                    "Last ${locationResult.locations.size} locations recorded" +
-                            "\nLongitude: ${locationResult.lastLocation.longitude}" +
-                            "\nLatitude: ${locationResult.lastLocation.latitude}" +
-                            "\nBearing: ${locationResult.lastLocation.bearing}" +
-                            "\nSpeed: ${locationResult.lastLocation.speed}"
+                onLocationUpdate(locationResult)
             }
         }
 
@@ -64,6 +66,51 @@ class FirstFragment : Fragment() {
     override fun onResume() {
         super.onResume()
         startLocationUpdates()
+    }
+
+    private fun onLocationUpdate(locationResult: LocationResult) {
+        updateDisplay(locationResult)
+        broadcastData(locationResult)
+    }
+
+    private fun updateDisplay(locationResult: LocationResult) {
+        _binding?.coordinatesText?.text =
+            "Last ${locationResult.locations.size} locations recorded" +
+                    "\nLongitude: ${locationResult.lastLocation.longitude}" +
+                    "\nLatitude: ${locationResult.lastLocation.latitude}" +
+                    "\nBearing: ${locationResult.lastLocation.bearing}" +
+                    "\nSpeed: ${locationResult.lastLocation.speed}"
+
+    }
+
+    private fun broadcastData(locationResult: LocationResult) {
+        context ?: return
+        val bluetoothManager = requireContext().getSystemService<BluetoothManager>()
+            ?: return
+
+        val settings = AdvertiseSettings.Builder()
+            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_POWER)
+            .setConnectable(false)
+            .setTimeout(1000)
+            .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
+            .build()
+
+        val payload: ByteArray = "test".toByteArray()
+
+        val data = AdvertiseData.Builder()
+            .setIncludeDeviceName(false)
+            .setIncludeTxPowerLevel(false)
+            .addServiceData(
+                ParcelUuid.fromString("5dd9bb0f-0d4a-4f03-aeec-070a700b8ff3"),
+                payload,
+            )
+            .build()
+
+        val callback = object : AdvertiseCallback() {
+            override fun onStartFailure(errorCode: Int) {}
+        }
+
+        bluetoothManager.adapter.bluetoothLeAdvertiser.startAdvertising(settings, data, callback);
     }
 
     private fun startLocationUpdates() {
@@ -86,10 +133,6 @@ class FirstFragment : Fragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
-
-        binding.buttonFirst.setOnClickListener {
-            findNavController().navigate(R.id.action_FirstFragment_to_SecondFragment)
-        }
 
         binding.permissionsButton.setOnClickListener {
             requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION), 0)
