@@ -8,6 +8,13 @@
     tools:context=".FirstFragment">
 
     <TextView
+        android:id="@+id/scan_text"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:text="No scan results" />
+
+    <TextView
         android:id="@+id/coordinates_text"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"

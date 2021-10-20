@@ -1,17 +1,13 @@
 package com.example.b2i
 
 import android.Manifest
-import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
-import android.bluetooth.le.AdvertiseCallback
-import android.bluetooth.le.AdvertiseData
-import android.bluetooth.le.AdvertiseSettings
-import android.bluetooth.le.BluetoothLeAdvertiser
-import android.content.Context
+import android.bluetooth.le.*
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.Looper
 import android.os.ParcelUuid
+import android.util.Log.d
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -29,11 +25,15 @@ class FirstFragment : Fragment() {
     private var locationRequest: LocationRequest = LocationRequest.create()
     private lateinit var locationCallback: LocationCallback
 
+    private var _bluetoothManager: BluetoothManager? = null
+
     private var _binding: FragmentFirstBinding? = null
 
     // This property is only valid between onCreateView and
     // onDestroyView.
     private val binding get() = _binding!!
+
+    private val uuid: ParcelUuid = ParcelUuid.fromString("00002aae-0000-1000-8000-00805f9b34fb")
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -57,10 +57,32 @@ class FirstFragment : Fragment() {
         inflater: LayoutInflater, container: ViewGroup?,
         savedInstanceState: Bundle?
     ): View {
+        _bluetoothManager = requireContext().getSystemService()
+        d("_bluetoothManager", _bluetoothManager.toString())
+        val scanCallback: ScanCallback = object : ScanCallback() {
+            override fun onScanResult(callbackType: Int, result: ScanResult?) {
+                result ?: return
+                if (result.scanRecord?.serviceData?.containsKey(uuid) == true)
+                    _binding?.scanText?.text =
+                        result.scanRecord?.serviceData?.get(uuid)?.let { String(it) }
+            }
+        }
+
+        val scanFilter = mutableListOf(
+            ScanFilter.Builder()
+                .build()
+        )
+
+        val scanSettings = ScanSettings.Builder().build()
+
+        _bluetoothManager?.adapter?.bluetoothLeScanner?.startScan(
+            scanFilter,
+            scanSettings,
+            scanCallback
+        )
 
         _binding = FragmentFirstBinding.inflate(inflater, container, false)
         return binding.root
-
     }
 
     override fun onResume() {
@@ -80,37 +102,39 @@ class FirstFragment : Fragment() {
                     "\nLatitude: ${locationResult.lastLocation.latitude}" +
                     "\nBearing: ${locationResult.lastLocation.bearing}" +
                     "\nSpeed: ${locationResult.lastLocation.speed}"
-
     }
 
     private fun broadcastData(locationResult: LocationResult) {
-        context ?: return
-        val bluetoothManager = requireContext().getSystemService<BluetoothManager>()
-            ?: return
+        _bluetoothManager ?: return
 
         val settings = AdvertiseSettings.Builder()
-            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_POWER)
+            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
             .setConnectable(false)
             .setTimeout(1000)
             .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
             .build()
 
-        val payload: ByteArray = "test".toByteArray()
+        val payload: ByteArray =
+            "${locationResult.lastLocation.latitude},${locationResult.lastLocation.longitude}".toByteArray()
 
         val data = AdvertiseData.Builder()
             .setIncludeDeviceName(false)
             .setIncludeTxPowerLevel(false)
-            .addServiceData(
-                ParcelUuid.fromString("5dd9bb0f-0d4a-4f03-aeec-070a700b8ff3"),
-                payload,
-            )
+            .addServiceData(uuid, payload)
             .build()
 
         val callback = object : AdvertiseCallback() {
-            override fun onStartFailure(errorCode: Int) {}
+            override fun onStartFailure(errorCode: Int) {
+                d("onStartFailure", "onStartFailure")
+            }
         }
 
-        bluetoothManager.adapter.bluetoothLeAdvertiser.startAdvertising(settings, data, callback);
+        _bluetoothManager?.adapter?.bluetoothLeAdvertiser?.startAdvertising(
+            settings,
+            data,
+            callback
+        )
+
     }
 
     private fun startLocationUpdates() {
