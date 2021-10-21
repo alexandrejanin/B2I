@@ -4,6 +4,7 @@ import android.Manifest
 import android.bluetooth.BluetoothManager
 import android.bluetooth.le.*
 import android.content.pm.PackageManager
+import android.location.Location
 import android.os.Bundle
 import android.os.Looper
 import android.os.ParcelUuid
@@ -11,6 +12,7 @@ import android.util.Log.d
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.CheckBox
 import androidx.core.app.ActivityCompat
 import androidx.core.content.getSystemService
 import androidx.fragment.app.Fragment
@@ -21,138 +23,36 @@ import com.google.android.gms.location.*
  * A simple [Fragment] subclass as the default destination in the navigation.
  */
 class FirstFragment : Fragment() {
-    private lateinit var fusedLocationClient: FusedLocationProviderClient
-    private var locationRequest: LocationRequest = LocationRequest.create()
-    private lateinit var locationCallback: LocationCallback
-
-    private var _bluetoothManager: BluetoothManager? = null
-
     private var _binding: FragmentFirstBinding? = null
-
-    // This property is only valid between onCreateView and
-    // onDestroyView.
     private val binding get() = _binding!!
 
-    private val uuid: ParcelUuid = ParcelUuid.fromString("00002aae-0000-1000-8000-00805f9b34fb")
+    private var bluetoothManager: BluetoothManager? = null
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
+    private val serviceUuid: ParcelUuid =
+        ParcelUuid.fromString("00002aae-0000-1000-8000-00805f9b34fb")
 
-        fusedLocationClient = LocationServices.getFusedLocationProviderClient(requireContext())
+    private var scanMode = false
+    private val broadcastMode get() = !scanMode
 
-        locationRequest.interval = 500
-        locationRequest.priority = LocationRequest.PRIORITY_HIGH_ACCURACY
-
-        locationCallback = object : LocationCallback() {
-            override fun onLocationResult(locationResult: LocationResult?) {
-                locationResult ?: return
-                locationResult.lastLocation ?: return
-                onLocationUpdate(locationResult)
-            }
+    private val scanCallback: ScanCallback = object : ScanCallback() {
+        override fun onScanResult(callbackType: Int, result: ScanResult?) {
+            result ?: return
+            if (result.scanRecord?.serviceData?.containsKey(serviceUuid) == true)
+                _binding?.scanText?.text =
+                    result.scanRecord?.serviceData?.get(serviceUuid)?.let { String(it) }
         }
 
+        override fun onScanFailed(errorCode: Int) {
+            _binding?.scanText?.let { it.text = "Scan failed: Error ${errorCode}" }
+        }
     }
 
     override fun onCreateView(
         inflater: LayoutInflater, container: ViewGroup?,
         savedInstanceState: Bundle?
     ): View {
-        _bluetoothManager = requireContext().getSystemService()
-        d("_bluetoothManager", _bluetoothManager.toString())
-        val scanCallback: ScanCallback = object : ScanCallback() {
-            override fun onScanResult(callbackType: Int, result: ScanResult?) {
-                result ?: return
-                if (result.scanRecord?.serviceData?.containsKey(uuid) == true)
-                    _binding?.scanText?.text =
-                        result.scanRecord?.serviceData?.get(uuid)?.let { String(it) }
-            }
-        }
-
-        val scanFilter = mutableListOf(
-            ScanFilter.Builder()
-                .build()
-        )
-
-        val scanSettings = ScanSettings.Builder().build()
-
-        _bluetoothManager?.adapter?.bluetoothLeScanner?.startScan(
-            scanFilter,
-            scanSettings,
-            scanCallback
-        )
-
         _binding = FragmentFirstBinding.inflate(inflater, container, false)
         return binding.root
-    }
-
-    override fun onResume() {
-        super.onResume()
-        startLocationUpdates()
-    }
-
-    private fun onLocationUpdate(locationResult: LocationResult) {
-        updateDisplay(locationResult)
-        broadcastData(locationResult)
-    }
-
-    private fun updateDisplay(locationResult: LocationResult) {
-        _binding?.coordinatesText?.text =
-            "Last ${locationResult.locations.size} locations recorded" +
-                    "\nLongitude: ${locationResult.lastLocation.longitude}" +
-                    "\nLatitude: ${locationResult.lastLocation.latitude}" +
-                    "\nBearing: ${locationResult.lastLocation.bearing}" +
-                    "\nSpeed: ${locationResult.lastLocation.speed}"
-    }
-
-    private fun broadcastData(locationResult: LocationResult) {
-        _bluetoothManager ?: return
-
-        val settings = AdvertiseSettings.Builder()
-            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
-            .setConnectable(false)
-            .setTimeout(1000)
-            .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
-            .build()
-
-        val payload: ByteArray =
-            "${locationResult.lastLocation.latitude},${locationResult.lastLocation.longitude}".toByteArray()
-
-        val data = AdvertiseData.Builder()
-            .setIncludeDeviceName(false)
-            .setIncludeTxPowerLevel(false)
-            .addServiceData(uuid, payload)
-            .build()
-
-        val callback = object : AdvertiseCallback() {
-            override fun onStartFailure(errorCode: Int) {
-                d("onStartFailure", "onStartFailure")
-            }
-        }
-
-        _bluetoothManager?.adapter?.bluetoothLeAdvertiser?.startAdvertising(
-            settings,
-            data,
-            callback
-        )
-
-    }
-
-    private fun startLocationUpdates() {
-        if (ActivityCompat.checkSelfPermission(
-                requireContext(),
-                Manifest.permission.ACCESS_FINE_LOCATION
-            ) == PackageManager.PERMISSION_GRANTED
-            ||
-            ActivityCompat.checkSelfPermission(
-                requireContext(),
-                Manifest.permission.ACCESS_COARSE_LOCATION
-            ) == PackageManager.PERMISSION_GRANTED
-        )
-            fusedLocationClient.requestLocationUpdates(
-                locationRequest,
-                locationCallback,
-                Looper.getMainLooper()
-            )
     }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
@@ -161,10 +61,116 @@ class FirstFragment : Fragment() {
         binding.permissionsButton.setOnClickListener {
             requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION), 0)
         }
+
+        binding.modeCheckbox.setOnClickListener {
+            if (it is CheckBox) {
+                scanMode = it.isChecked
+            }
+        }
+
+        bluetoothManager = requireContext().getSystemService()
+
+        requestLocationUpdates()
+        onChangeMode()
     }
 
     override fun onDestroyView() {
         super.onDestroyView()
         _binding = null
+    }
+
+    private fun onChangeMode() {
+        if (scanMode) {
+            startScan()
+        } else {
+            bluetoothManager?.adapter?.bluetoothLeScanner?.stopScan(scanCallback)
+        }
+    }
+
+    private fun startScan() {
+        val scanFilter = mutableListOf(
+            ScanFilter.Builder()
+                .build()
+        )
+
+        val scanSettings = ScanSettings.Builder()
+            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+            .build()
+
+        bluetoothManager?.adapter?.bluetoothLeScanner?.startScan(
+            scanFilter,
+            scanSettings,
+            scanCallback
+        )
+    }
+
+    private fun onLocationUpdate(location: Location) {
+        updateLocationDisplay(location)
+        if (broadcastMode)
+            startLocationBroadcast(location)
+    }
+
+    private fun updateLocationDisplay(location: Location) {
+        _binding?.coordinatesText?.text =
+            "\nLongitude: ${location.longitude}" +
+                    "\nLatitude: ${location.latitude}" +
+                    "\nBearing: ${location.bearing}" +
+                    "\nSpeed: ${location.speed}"
+    }
+
+    private fun startLocationBroadcast(location: Location) {
+        val settings = AdvertiseSettings.Builder()
+            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
+            .setConnectable(false)
+            .setTimeout(0)
+            .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
+            .build()
+
+        val payload: ByteArray = "${location.latitude},${location.longitude}".toByteArray()
+
+        val data = AdvertiseData.Builder()
+            .setIncludeDeviceName(false)
+            .setIncludeTxPowerLevel(false)
+            .addServiceData(serviceUuid, payload)
+            .build()
+
+        val callback = object : AdvertiseCallback() {
+            override fun onStartFailure(errorCode: Int) {
+                d("onStartFailure", "onStartFailure(${errorCode})")
+            }
+        }
+
+        bluetoothManager?.adapter?.bluetoothLeAdvertiser?.startAdvertising(
+            settings,
+            data,
+            callback
+        )
+    }
+
+    private fun requestLocationUpdates() {
+        if (ActivityCompat.checkSelfPermission(
+                requireContext(),
+                Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+        ) {
+            binding.permissionsButton.visibility = View.GONE
+            val locationRequest: LocationRequest = LocationRequest.create()
+                .setInterval(500)
+                .setPriority(LocationRequest.PRIORITY_HIGH_ACCURACY)
+
+            val locationCallback: LocationCallback = object : LocationCallback() {
+                override fun onLocationResult(result: LocationResult) {
+                    result.lastLocation ?: return
+                    onLocationUpdate(result.lastLocation)
+                }
+            }
+
+            LocationServices.getFusedLocationProviderClient(requireContext())
+                .requestLocationUpdates(
+                    locationRequest,
+                    locationCallback,
+                    Looper.getMainLooper()
+                )
+        }
     }
 }
