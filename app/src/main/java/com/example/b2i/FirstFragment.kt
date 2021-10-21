@@ -18,6 +18,8 @@ import androidx.core.content.getSystemService
 import androidx.fragment.app.Fragment
 import com.example.b2i.databinding.FragmentFirstBinding
 import com.google.android.gms.location.*
+import java.util.*
+import kotlin.collections.HashMap
 
 /**
  * A simple [Fragment] subclass as the default destination in the navigation.
@@ -34,16 +36,52 @@ class FirstFragment : Fragment() {
     private var scanMode = false
     private val broadcastMode get() = !scanMode
 
+    private val devices = HashMap<String, MutableList<Pair<Location, Date>>>()
+
+    private var lastLocation: Location? = null
+
     private val scanCallback: ScanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult?) {
             result ?: return
-            if (result.scanRecord?.serviceData?.containsKey(serviceUuid) == true)
-                _binding?.scanText?.text =
-                    result.scanRecord?.serviceData?.get(serviceUuid)?.let { String(it) }
+            result.device ?: return
+            result.scanRecord?.serviceData ?: return
+            if (result.scanRecord!!.serviceData.containsKey(serviceUuid)) {
+                val id = result.device!!.address
+                val data = String(result.scanRecord!!.serviceData!![serviceUuid]!!)
+                    .split(',')
+
+                val location = Location("B2I")
+                location.latitude = data[0].toDouble()
+                location.longitude = data[1].toDouble()
+                location.bearing = data[2].toFloat()
+                location.speed = data[3].toFloat()
+
+                val time = Calendar.getInstance().time
+
+                if (!devices.containsKey(id))
+                    devices[id] = mutableListOf()
+                devices[id]!!.add(Pair(location, time))
+
+                var text = ""
+                for (entry in devices) {
+                    text += "${entry.key}" +
+                            "\n${entry.value.size} locations known" +
+                            "\nGPS Speed: ${entry.value.last().first.speed} m/s" +
+                            "\nCalculated Speed: ${calculateSpeed(entry.value.takeLast(3))}" +
+                            "\nDistance: ${
+                                calculateDistance(
+                                    lastLocation ?: entry.value.last().first,
+                                    entry.value.last().first
+                                )
+                            }" +
+                            "\n\n"
+                }
+                _binding?.scanText?.text = text
+            }
         }
 
         override fun onScanFailed(errorCode: Int) {
-            _binding?.scanText?.let { it.text = "Scan failed: Error ${errorCode}" }
+            _binding?.scanText?.let { it.text = "Scan failed: Error $errorCode" }
         }
     }
 
@@ -105,6 +143,7 @@ class FirstFragment : Fragment() {
     }
 
     private fun onLocationUpdate(location: Location) {
+        lastLocation = location
         updateLocationDisplay(location)
         if (broadcastMode)
             startLocationBroadcast(location)
@@ -126,7 +165,8 @@ class FirstFragment : Fragment() {
             .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
             .build()
 
-        val payload: ByteArray = "${location.latitude},${location.longitude}".toByteArray()
+        val payload: ByteArray =
+            "${location.latitude},${location.longitude},${location.bearing},${location.speed}".toByteArray()
 
         val data = AdvertiseData.Builder()
             .setIncludeDeviceName(false)
@@ -156,6 +196,7 @@ class FirstFragment : Fragment() {
             binding.permissionsButton.visibility = View.GONE
             val locationRequest: LocationRequest = LocationRequest.create()
                 .setInterval(500)
+                .setFastestInterval(50)
                 .setPriority(LocationRequest.PRIORITY_HIGH_ACCURACY)
 
             val locationCallback: LocationCallback = object : LocationCallback() {
@@ -172,5 +213,29 @@ class FirstFragment : Fragment() {
                     Looper.getMainLooper()
                 )
         }
+    }
+
+    private fun calculateSpeed(locations: List<Pair<Location, Date>>): Double {
+        var totalMeters = 0.0
+        var totalSeconds = 0.0
+
+        for (i in 0..locations.size - 2) {
+            totalMeters += calculateDistance(locations[i].first, locations[i + 1].first)
+            totalSeconds += (locations[i + 1].second.time - locations[i].second.time) / 1000
+        }
+
+        return totalMeters / totalSeconds
+    }
+
+    private fun calculateDistance(a: Location, b: Location): Float {
+        val distance = floatArrayOf(0f)
+        Location.distanceBetween(
+            a.latitude,
+            a.longitude,
+            b.latitude,
+            b.longitude,
+            distance
+        )
+        return distance[0]
     }
 }
