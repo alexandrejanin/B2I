@@ -31,14 +31,28 @@ class FirstFragment : Fragment() {
     private var bluetoothManager: BluetoothManager? = null
 
     private val serviceUuid: ParcelUuid =
-        ParcelUuid.fromString("00002aae-0000-1000-8000-00805f9b34fb")
+        ParcelUuid.fromString("00001201-0000-1000-8000-00805f9b34fb")
 
     private var scanMode = false
     private val broadcastMode get() = !scanMode
 
+    private var deviceId = generateId(1)
+
     private val devices = HashMap<String, MutableList<Pair<Location, Date>>>()
 
     private var lastLocation: Location? = null
+
+    private val advertiseCallback = object : AdvertiseCallback() {
+        override fun onStartFailure(errorCode: Int) {
+            super.onStartFailure(errorCode)
+            d("onStartFailure", "onStartFailure(${errorCode})")
+        }
+
+        override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
+            super.onStartSuccess(settingsInEffect)
+            d("onStartSuccess", "$settingsInEffect")
+        }
+    }
 
     private val scanCallback: ScanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult?) {
@@ -46,28 +60,34 @@ class FirstFragment : Fragment() {
             result.device ?: return
             result.scanRecord?.serviceData ?: return
             if (result.scanRecord!!.serviceData.containsKey(serviceUuid)) {
-                val id = result.device!!.address
+                d("onScanResult", "${callbackType}, $result")
                 val data = String(result.scanRecord!!.serviceData!![serviceUuid]!!)
                     .split(',')
 
+                val id = data[0]
+
+                d("deviceId", id)
+
                 val location = Location("B2I")
-                location.latitude = data[0].toDouble()
-                location.longitude = data[1].toDouble()
-                location.bearing = data[2].toFloat()
+                location.latitude = data[1].toDouble()
+                location.longitude = data[2].toDouble()
                 location.speed = data[3].toFloat()
 
                 val time = Calendar.getInstance().time
 
                 if (!devices.containsKey(id))
-                    devices[id] = mutableListOf()
-                devices[id]!!.add(Pair(location, time))
+                    devices[id] = mutableListOf(Pair(location, time))
+                else if (devices[id]!!.last().first.latitude != location.latitude
+                    || devices[id]!!.last().first.longitude != location.longitude
+                )
+                    devices[id]!!.add(Pair(location, time))
 
                 var text = ""
                 for (entry in devices) {
                     text += "${entry.key}" +
                             "\n${entry.value.size} locations known" +
                             "\nGPS Speed: ${entry.value.last().first.speed} m/s" +
-                            "\nCalculated Speed: ${calculateSpeed(entry.value.takeLast(3))}" +
+                            "\nCalculated Speed: ${calculateSpeed(entry.value.takeLast(5))}" +
                             "\nDistance: ${
                                 calculateDistance(
                                     lastLocation ?: entry.value.last().first,
@@ -103,6 +123,7 @@ class FirstFragment : Fragment() {
         binding.modeCheckbox.setOnClickListener {
             if (it is CheckBox) {
                 scanMode = it.isChecked
+                onChangeMode()
             }
         }
 
@@ -165,25 +186,24 @@ class FirstFragment : Fragment() {
             .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
             .build()
 
-        val payload: ByteArray =
-            "${location.latitude},${location.longitude},${location.bearing},${location.speed}".toByteArray()
+        val payload =
+            "$deviceId,${location.latitude},${location.longitude},${"%.2f".format(location.speed)}"
+        d("payload", payload)
+        val byteArray = payload.toByteArray()
+        d("payloadLength", "${byteArray.size}")
 
         val data = AdvertiseData.Builder()
             .setIncludeDeviceName(false)
             .setIncludeTxPowerLevel(false)
-            .addServiceData(serviceUuid, payload)
+            .addServiceData(serviceUuid, byteArray)
             .build()
 
-        val callback = object : AdvertiseCallback() {
-            override fun onStartFailure(errorCode: Int) {
-                d("onStartFailure", "onStartFailure(${errorCode})")
-            }
-        }
+        bluetoothManager?.adapter?.bluetoothLeAdvertiser?.stopAdvertising(advertiseCallback)
 
         bluetoothManager?.adapter?.bluetoothLeAdvertiser?.startAdvertising(
             settings,
             data,
-            callback
+            advertiseCallback,
         )
     }
 
@@ -237,5 +257,12 @@ class FirstFragment : Fragment() {
             distance
         )
         return distance[0]
+    }
+
+    private fun generateId(length: Int): String {
+        val allowedChars = ('A'..'Z') + ('a'..'z') + ('0'..'9')
+        return (1..length)
+            .map { allowedChars.random() }
+            .joinToString("")
     }
 }
